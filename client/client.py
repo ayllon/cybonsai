@@ -4,6 +4,7 @@ import logging
 import optparse
 import serial
 import signal
+import sqlite3
 import sys
 import threading
 import time
@@ -61,16 +62,26 @@ class BaseStore(threading.Thread):
         self.keep_going = True
         self.interval = interval
         
-    def _store(self, timestamp, key, value):
+    def setup(self):
+        pass
+    
+    def tear_down(self):
+        pass
+        
+    def store(self, timestamp, key, value):
         pass
     
     def run(self):
-        while self.keep_going and self.acquirer.is_alive():
-            time.sleep(self.interval)
-            timestamp = datetime.datetime.utcnow()
-            for key, value in self.acquirer.values.iteritems():
-                log.info("Store %s" % key)
-                self._store(timestamp, key, value)
+        self.setup()
+        try:
+            while self.keep_going and self.acquirer.is_alive():
+                time.sleep(self.interval)
+                timestamp = datetime.datetime.utcnow()
+                for key, value in self.acquirer.values.iteritems():
+                    log.info("Store %s" % key)
+                    self.store(timestamp, key, value)
+        finally:
+            self.tear_down()
     
     def stop(self):
         self.keep_going = False
@@ -81,13 +92,39 @@ class CSVStore(BaseStore):
     def __init__(self, path, acquirer, interval):
         super(CSVStore, self).__init__(acquirer, interval)
         self.path = path
-        self.keep_going = True
-        self.interval = interval
         self.fd = open(self.path, "a")
     
-    def _store(self, timestamp, key, value):
+    def store(self, timestamp, key, value):
         print >>self.fd, "%s,%s,%s" % (timestamp, key, value)
         self.fd.flush()
+
+
+class SQLiteStore(BaseStore):
+    
+    def __init__(self, path, acquirer, interval):
+        super(SQLiteStore, self).__init__(acquirer, interval)
+        self.path = path
+        self.conn = None
+        
+    def create_tables(self):
+        self.conn.execute(
+          """CREATE TABLE IF NOT EXISTS t_events
+             (timestamp TEXT, sensor TEXT, value REAL)
+          """
+        )
+        
+    def setup(self):
+        self.conn = sqlite3.connect(self.path)
+        self.create_tables()
+        
+    def store(self, timestamp, key, value):
+        self.conn.execute(
+          """INSERT INTO t_events VALUES
+             (?, ?, ?)
+          """,
+          (timestamp.strftime("%Y-%m-%dT%H:%M:%S"), key, value)
+        )
+        self.conn.commit()
 
 
 if __name__ == "__main__":
@@ -99,6 +136,10 @@ if __name__ == "__main__":
     parser.add_option(
         "-v", "--verbose", default=False, action="store_true",
         help="Enable verbose mode"
+    )
+    parser.add_option(
+        "--csv", default=False, action="store_true",
+        help="Store data as CSV"
     )
     
     opt, args = parser.parse_args()
@@ -117,7 +158,10 @@ if __name__ == "__main__":
         
     # Create workers
     acq = Acquirer(args[0])
-    store = CSVStore(args[1], acq, opt.interval)
+    if opt.csv:
+        store = CSVStore(args[1], acq, opt.interval)
+    else:
+        store = SQLiteStore(args[1], acq, opt.interval)
     
     # Install signal handler
     def sigint_handler(signum, frame):
