@@ -209,10 +209,10 @@ if __name__ == "__main__":
 
     opt, args = parser.parse_args()
 
-    if len(args) < 2:
+    if len(args) < 1:
         parser.error("Missing serial device")
-    if len(sys.argv) < 3:
-        parser.error("Missing csv file")
+    if len(args) < 2:
+        parser.error("Missing store file")
 
     # Setup logging
     handler = logging.StreamHandler(sys.stderr)
